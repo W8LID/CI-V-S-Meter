@@ -58,7 +58,7 @@ void loop()
         delay(1); // Help keep the buffer full.
     }
 
-    if(idx >= 7) // Got some data, let's take a look.
+    if(idx >= 8) // Got some data, let's take a look.
     {
         if(response[0] == 0xFE && response[1] == 0xFE) // Looks like a valid preamble, go on.
         {
@@ -78,8 +78,9 @@ void loop()
                 }
             }
         }
+        // Clean house
         memset(response, 0, sizeof(response));
-        retries = 0; // We got something, reset the counter but we should do this somewhere else
+        retries = 0;
    }
 
     // This counts the number of times we went for a loop without anything 
