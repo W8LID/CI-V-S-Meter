@@ -17,9 +17,7 @@ int retries = 0; //Connection loss counter
 unsigned long previousMillis = 0; //Timer stuffs
 const long interval = 30; // Keep updates to 30mS or more because that's what the rig likes YMMV
 
- // Our data, this is ugly  and will disappear soon
- // I don't even like the names, what was I thinking?
-byte firstS = 0, secondS = 0, thirdS = 0;
+unsigned char response[9]; // Buffer for received data
 
 Adafruit_NeoPixel strip = Adafruit_NeoPixel(N_PIXELS, LED_PIN, NEO_GRB + NEO_KHZ800);
 
@@ -28,6 +26,9 @@ void setup()
     // Initialize hardware
     strip.begin();
     Serial.begin(19200);
+
+    // Initialize data
+    memset(response, 0, sizeof(response));
 }
 
 void loop()
@@ -44,47 +45,50 @@ void loop()
 
     while(Serial.available()) // We have something!
     {
+        if(idx > 8)
+        {
+          break; //Don't overflow
+        }
         // We make a lot of assumptions here and this will all be refactored soon.
         // We have no idea if we're getting our response or something else and 
         // assume we're the only traffic.
-        char c = Serial.read();
-        if(idx == 6)
-        {
-            firstS = c;
-        }
-        if(idx == 7)
-        {
-            secondS = c;
-        }
-        
-        if(idx == 8)
-        {
-            thirdS = c;
-        }
-
+        unsigned char c = Serial.read();
+        response[idx] = c;
         idx++;
         delay(1); // Help keep the buffer full.
-        retries = 0; // We got something, reset the counter but we should do this somewhere else
     }
+
+    if(idx >= 7) // Got some data, let's take a look.
+    {
+        if(response[0] == 0xFE && response[1] == 0xFE) // Looks like a valid preamble, go on.
+        {
+            if(response[2] == LOCAL_ADDR && response[3] == REMOTE_ADDR) // From our rig to us.
+            {
+                if(response[4] == 0x15 && response[5] == 0x02) // Correct command and subcommand.
+                {
+                    if(response[7] == 0xFD) // Check position of end of message to see the size of data.
+                    {
+                        sLevel = bcdToDec(response[6]);
+                    }
+                    else if(response[8] == 0xFD)
+                    {
+                        sLevel = bcdToDec(response[6]) * 100; //MSB
+                        sLevel += bcdToDec(response[7]);
+                    }
+                }
+            }
+        }
+        memset(response, 0, sizeof(response));
+        retries = 0; // We got something, reset the counter but we should do this somewhere else
+   }
 
     // This counts the number of times we went for a loop without anything 
     // being received by the UART, prevents glitches.
     if(retries >= 1500)
     {
-      firstS = 0,secondS = 0,thirdS = 0;
       sLevel = 0;
       retries = 0;
-    }
-
-    // Look for end of message, its the only thing we check right now.
-    if(secondS == 0xFD)
-    {
-        sLevel = bcdToDec(firstS);
-    }
-    else if(thirdS == 0xFD)
-    {
-        sLevel = bcdToDec(secondS);
-        sLevel += bcdToDec(firstS) * 100;
+      memset(response, 0, sizeof(response));
     }
 
     // How high are we?
