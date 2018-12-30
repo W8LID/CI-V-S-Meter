@@ -2,8 +2,8 @@
 
 #define N_PIXELS  30  // Number of pixels in strand
 #define LED_PIN    6  // NeoPixel LED strand is connected to this pin
-#define TOP       (N_PIXELS + 2) // Allow dot to go slightly off scale
-#define PEAK_FALL 15  // Rate of peak falling dot
+#define TOP       (N_PIXELS + 1) // Allow dot to go slightly off scale
+#define PEAK_FALL 3  // Rate of peak falling dot
 
 #define REMOTE_ADDR 0x60 // Default for IC-910H
 #define LOCAL_ADDR 0xE0 // Our Address
@@ -11,11 +11,11 @@
 byte peak = 0;      // Used for falling dot
 byte dotCount  = 0;      // Frame counter for delaying dot-falling speed
 
-int sLevel = 0; //Decimal signal level 0-255
-int retries = 0; //Connection loss counter
+uint8_t sLevel = 0; //Decimal signal level 0-255
+uint8_t retries = 0; //Connection loss counter
 
 unsigned long previousMillis = 0; //Timer stuffs
-const long interval = 30; // Keep updates to 30mS or more because that's what the rig likes YMMV
+const long timeout = 100; // Timeout for response
 
 unsigned char response[9]; // Buffer for received data
 
@@ -33,63 +33,24 @@ void setup()
 
 void loop()
 {
-    int idx = 0;
+    uint8_t tempLevel = sMeter();
 
-    // Request data, intervals shorter than 30mS seem to cause problems.
-    unsigned long currentMillis = millis();
-    if (currentMillis - previousMillis >= interval) 
-    {
-        previousMillis = currentMillis;
-        readSMeter();
+    if(tempLevel == 0) //Not the best check but...
+    {                  //It's highly likely an actual 0 from S means lost connection
+        retries++;
     }
-
-    while(Serial.available()) // We have something!
-    {
-        if(idx > 8)
-        {
-          break; //Don't overflow
-        }
-        // We make a lot of assumptions here and this will all be refactored soon.
-        // We have no idea if we're getting our response or something else and 
-        // assume we're the only traffic.
-        unsigned char c = Serial.read();
-        response[idx] = c;
-        idx++;
-        delay(1); // Help keep the buffer full.
-    }
-
-    if(idx >= 8) // Got some data, let's take a look.
-    {
-        if(response[0] == 0xFE && response[1] == 0xFE) // Looks like a valid preamble, go on.
-        {
-            if(response[2] == LOCAL_ADDR && response[3] == REMOTE_ADDR) // From our rig to us.
-            {
-                if(response[4] == 0x15 && response[5] == 0x02) // Correct command and subcommand.
-                {
-                    if(response[7] == 0xFD) // Check position of end of message to see the size of data.
-                    {
-                        sLevel = bcdToDec(response[6]);
-                    }
-                    else if(response[8] == 0xFD)
-                    {
-                        sLevel = bcdToDec(response[6]) * 100; //MSB
-                        sLevel += bcdToDec(response[7]);
-                    }
-                }
-            }
-        }
-        // Clean house
-        memset(response, 0, sizeof(response));
+    else
+    {   //Got something, carry on.
+        sLevel = tempLevel;
         retries = 0;
-   }
-
-    // This counts the number of times we went for a loop without anything 
-    // being received by the UART, prevents glitches.
-    if(retries >= 1500)
+    }
+    
+    // This counts the number of times we went for a loop without anything
+    // Die and try again
+    if(retries >= 25)
     {
       sLevel = 0;
       retries = 0;
-      memset(response, 0, sizeof(response));
     }
 
     // How high are we?
@@ -143,9 +104,6 @@ void loop()
         }
         dotCount = 0;
     }
-
-    // Increment the retry counter
-    retries++;
 }
 
 // Input a value 0 to 255 to get a color value.
@@ -169,8 +127,11 @@ uint32_t Wheel(byte WheelPos)
     }
 }
 
-void readSMeter() //CI-V to read the S meter
+uint8_t sMeter()
 {
+    uint8_t meter = 0;
+    memset(response, 0, sizeof(response)); // Clear the response buffer
+
     Serial.write(0xFE);
     Serial.write(0xFE);
     Serial.write(REMOTE_ADDR);
@@ -180,9 +141,50 @@ void readSMeter() //CI-V to read the S meter
     Serial.write(0xFD);
     Serial.flush();
     delay(1); // Experience tells me to give a little time to clear the buffer.
+
+    previousMillis = millis();
+    while(!Serial.available()) // Waiting
+    {
+        if(millis() - previousMillis >= timeout) // Too long, try again next time.
+         {
+            break;
+         }
+     }
+
+     int idx = 0;
+     while(Serial.available()) // We have something!
+     {
+         unsigned char c = Serial.read();
+         response[idx] = c;
+         idx++;
+         delay(1); // Help keep the buffer full.
+     }
+        
+    if(idx >= 8) // Got some data, let's take a look.
+    {
+        if(response[0] == 0xFE && response[1] == 0xFE) // Looks like a valid preamble, go on.
+        {
+            if(response[2] == LOCAL_ADDR && response[3] == REMOTE_ADDR) // From our rig to us.
+            {
+                if(response[4] == 0x15 && response[5] == 0x02) // Correct command and subcommand.
+                {
+                    if(response[7] == 0xFD) // Check position of end of message to see the size of data.
+                    {
+                        meter = bcdToDec(response[6]);
+                    }
+                    else if(response[8] == 0xFD)
+                    {
+                        meter = bcdToDec(response[6]) * 100; //MSB
+                        meter += bcdToDec(response[7]);
+                    }
+                }
+            }
+        }
+    }
+    return meter;
 }
 
-byte bcdToDec(byte val) // Does what it says
+uint8_t bcdToDec(uint8_t val) // Does what it says
 {
     return( (val/16*10) + (val%16) );
 }
